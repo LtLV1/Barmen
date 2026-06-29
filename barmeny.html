@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="theme-color" content="#08080F"/>
+<title>Ведомость барменов</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0;}
+body{background:#08080F;font-family:-apple-system,system-ui,sans-serif;color:#EFEFEF;overscroll-behavior:none;}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;}
+input[type=number]{-moz-appearance:textfield;}
+textarea{resize:none;}
+button{font-family:inherit;cursor:pointer;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+const{useState,useEffect,useRef}=React;
+const el=React.createElement;
+
+const MONTHS=["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"];
+const MONTHS_GEN=["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
+const WDS=["Пн","Вт","Ср","Чт","Пт","Сб","Вс"];
+const TYPES=["Стажировка","Полная","Бек"];
+const TC={
+  "Стажировка":{color:"#FFD166",dim:"rgba(255,209,102,.15)",hint:"300 ₽/ч"},
+  "Полная":    {color:"#06D6A0",dim:"rgba(6,214,160,.13)",  hint:"1–3ч×300 / >3ч×500 / вых 500₽"},
+  "Бек":       {color:"#EF476F",dim:"rgba(239,71,111,.13)", hint:"3 000 ₽/смена"},
+};
+const BG="#08080F",CARD="#111120",LIFT="#181828",TXT="#EFEFEF",MUT="#44445E",
+      GRN="#06D6A0",RED="#EF476F",GOLD="#FFD166",BLUE="#4EA8DE";
+
+const daysInMonth=(y,m)=>new Date(y,m,0).getDate();
+const firstWd=(y,m)=>{const d=new Date(y,m-1,1).getDay();return d===0?6:d-1;};
+const isWE=(y,m,d)=>{const w=new Date(y,m-1,d).getDay();return w===0||w===6;};
+const fmt=n=>Math.round(n).toLocaleString("ru-RU");
+
+function calcEmp(emp,year,month){
+  if(!emp.type)return null;
+  const n=daysInMonth(year,month);let hrs=0,sh=0,earn=0;
+  for(let d=1;d<=n;d++){
+    const h=parseFloat(emp.days[d-1])||0;if(h<=0)continue;
+    if(emp.type==="Бек"){sh++;earn+=3000;}
+    else if(emp.type==="Стажировка"){hrs+=h;earn+=h*300;}
+    else{hrs+=h;earn+=isWE(year,month,d)?h*500:Math.min(h,3)*300+Math.max(h-3,0)*500;}
+  }
+  const f=parseFloat(emp.fines)||0;
+  const b=parseFloat(emp.bonus)||0;
+  return{hrs,sh,earn,f,b,net:earn-f+b};
+}
+
+const mkEmp=(month,year)=>({
+  name:"",type:"",days:Array(31).fill(""),
+  fines:"",finesComment:"",
+  bonus:"",bonusComment:"",
+  paidAmount:"",paidMonth:month,paidYear:year
+});
+
+function save(d){try{localStorage.setItem("bar:v8",JSON.stringify(d));}catch{}}
+function load(){try{const r=localStorage.getItem("bar:v8");return r?JSON.parse(r):null;}catch{return null;}}
+
+// ── SVG иконки ───────────────────────────────────────
+function IconMsg({color,size}){
+  return el("svg",{width:size,height:size,viewBox:"0 0 24 24",fill:"none",
+    stroke:color,strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"},
+    el("path",{d:"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"}));
+}
+function IconCheck({color,size}){
+  return el("svg",{width:size,height:size,viewBox:"0 0 24 24",fill:"none",
+    stroke:color,strokeWidth:2.5,strokeLinecap:"round",strokeLinejoin:"round"},
+    el("polyline",{points:"20 6 9 17 4 12"}));
+}
+function IconWallet({color,size}){
+  return el("svg",{width:size,height:size,viewBox:"0 0 24 24",fill:"none",
+    stroke:color,strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"},
+    el("rect",{x:"1",y:"4",width:"22",height:"16",rx:"2",ry:"2"}),
+    el("line",{x1:"1",y1:"10",x2:"23",y2:"10"}));
+}
+
+// ── Ячейка дня ──────────────────────────────────────
+function DayCell({day,val,weekend,type,onChange}){
+  const[edit,setEdit]=useState(false);
+  const ref=useRef();
+  const n=parseFloat(val)||0;const active=n>0;
+  useEffect(()=>{if(edit&&ref.current){ref.current.focus();ref.current.select();}},[edit]);
+  return el("div",{onClick:()=>setEdit(true),style:{
+    borderRadius:10,minHeight:62,cursor:"pointer",
+    background:active?(weekend?"rgba(239,71,111,.2)":"rgba(6,214,160,.12)"):(weekend?"rgba(239,71,111,.06)":LIFT),
+    border:"1px solid "+(active?(weekend?RED:GRN):(weekend?"rgba(239,71,111,.2)":"transparent")),
+    display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"space-between",padding:"6px 2px"}},
+    el("div",{style:{fontSize:10,fontWeight:700,color:weekend?RED:MUT}},day),
+    edit
+      ?el("input",{ref,type:"number",inputMode:"decimal",value:val,
+          onChange:ev=>onChange(ev.target.value),onBlur:()=>setEdit(false),
+          style:{width:"88%",background:"transparent",border:"none",color:TXT,fontSize:16,fontWeight:800,textAlign:"center",outline:"none",fontFamily:"inherit"}})
+      :el("div",{style:{fontSize:16,fontWeight:800,color:active?(weekend?RED:GRN):"#1E1E30"}},
+          active?(type==="Бек"?"✓":n):"·"),
+    el("div",{style:{height:3}})
+  );
+}
+
+// ── Деньги + комментарий ─────────────────────────────
+function MoneyBlock({label,color,value,comment,onValue,onComment}){
+  const[open,setOpen]=useState(!!comment);
+  return el("div",{style:{margin:"10px 10px 0",background:LIFT,borderRadius:18,padding:"14px 16px"}},
+    el("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
+      el("div",{style:{fontSize:9,color,textTransform:"uppercase",letterSpacing:3,fontWeight:700}},label),
+      el("button",{onClick:()=>setOpen(s=>!s),
+        style:{background:open?color+"22":"transparent",border:"none",padding:"5px 8px",borderRadius:8,display:"flex",alignItems:"center",gap:5}},
+        el(IconMsg,{color:comment?color:MUT,size:16}),
+        comment&&el("span",{style:{fontSize:10,color,fontWeight:600}},"есть заметка")
+      )
+    ),
+    el("div",{style:{display:"flex",alignItems:"center",gap:8}},
+      el("input",{type:"number",inputMode:"decimal",value,onChange:ev=>onValue(ev.target.value),placeholder:"0",
+        style:{background:"transparent",border:"none",color,fontSize:24,fontWeight:800,flex:1,outline:"none",fontFamily:"inherit"}}),
+      el("span",{style:{fontSize:16,color:MUT}},"₽")
+    ),
+    open&&el("textarea",{value:comment,onChange:ev=>onComment(ev.target.value),
+      placeholder:"Комментарий…",rows:2,
+      style:{width:"100%",marginTop:10,background:color+"15",border:"1px solid "+color+"44",
+        borderRadius:10,color:TXT,fontSize:13,padding:"8px 10px",outline:"none",
+        fontFamily:"inherit",boxSizing:"border-box"}})
+  );
+}
+
+// ── Блок «Выплачено» на сотрудника ──────────────────
+function PaidBlock({paidAmount,paidMonth,paidYear,onAmount,onPeriod}){
+  const[editAmt,setEditAmt]=useState(false);
+  const ref=useRef();
+  const amount=parseFloat(paidAmount)||0;
+
+  useEffect(()=>{if(editAmt&&ref.current){ref.current.focus();ref.current.select();}},[editAmt]);
+
+  const prevM=()=>{
+    if(paidMonth===1)onPeriod(12,paidYear-1);
+    else onPeriod(paidMonth-1,paidYear);
+  };
+  const nextM=()=>{
+    if(paidMonth===12)onPeriod(1,paidYear+1);
+    else onPeriod(paidMonth+1,paidYear);
+  };
+
+  return el("div",{style:{margin:"10px 10px 0",background:LIFT,borderRadius:18,padding:"14px 16px"}},
+    // Заголовок
+    el("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:12}},
+      el(IconWallet,{color:BLUE,size:16}),
+      el("div",{style:{fontSize:9,color:BLUE,textTransform:"uppercase",letterSpacing:3,fontWeight:700}},
+        "Выплачено"
+      ),
+      amount>0&&el("div",{style:{marginLeft:"auto",display:"flex",alignItems:"center",gap:5,
+        background:"rgba(78,168,222,.15)",borderRadius:8,padding:"3px 10px"}},
+        el(IconCheck,{color:BLUE,size:13}),
+        el("span",{style:{fontSize:10,color:BLUE,fontWeight:700}})
+      )
+    ),
+
+    // Выбор периода
+    el("div",{style:{marginBottom:12}},
+      el("div",{style:{fontSize:10,color:MUT,marginBottom:6}},"Период выплаты"),
+      el("div",{style:{display:"flex",alignItems:"center",gap:6}},
+        el("button",{onClick:prevM,style:{background:"#0F0F1E",border:"none",color:TXT,
+          width:34,height:34,borderRadius:10,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
+          "‹"
+        ),
+        el("div",{style:{flex:1,textAlign:"center",background:"#0F0F1E",borderRadius:10,padding:"7px 10px"}},
+          el("span",{style:{fontSize:14,fontWeight:700,color:amount?BLUE:TXT}},
+            MONTHS[paidMonth-1]+" "+paidYear
+          )
+        ),
+        el("button",{onClick:nextM,style:{background:"#0F0F1E",border:"none",color:TXT,
+          width:34,height:34,borderRadius:10,fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}},
+          "›"
+        )
+      )
+    ),
+
+    // Сумма
+    el("div",{style:{fontSize:10,color:MUT,marginBottom:6}},"Сумма выплаты"),
+    el("div",{style:{display:"flex",alignItems:"center",gap:8,
+      background:"#0F0F1E",borderRadius:12,padding:"10px 14px",cursor:"pointer"}}  ,
+      editAmt
+        ?el("input",{ref,type:"number",inputMode:"decimal",value:paidAmount,
+            onChange:ev=>onAmount(ev.target.value),
+            onBlur:()=>setEditAmt(false),placeholder:"0",
+            style:{background:"transparent",border:"none",color:BLUE,fontSize:22,
+              fontWeight:800,flex:1,outline:"none",fontFamily:"inherit"}})
+        :el("div",{onClick:()=>setEditAmt(true),style:{fontSize:22,fontWeight:800,
+            color:amount?BLUE:MUT,flex:1}},
+            amount?fmt(amount)+" ₽":"Введи сумму"
+          )
+    )
+  );
+}
+
+// ── Детальный вид ─────────────────────────────────────
+function Detail({emp,idx,year,month,onBack,onUpd,onUpdD}){
+  const r=calcEmp(emp,year,month);
+  const tc=emp.type?TC[emp.type]:null;
+  const n=daysInMonth(year,month);
+  const f=firstWd(year,month);
+
+  return el("div",{style:{background:BG,minHeight:"100vh",maxWidth:440,margin:"0 auto",paddingBottom:100}},
+    // Шапка
+    el("div",{style:{padding:"16px",position:"sticky",top:0,background:BG,zIndex:10,borderBottom:"1px solid "+LIFT}},
+      el("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:14}},
+        el("button",{onClick:onBack,style:{background:"none",border:"none",color:GRN,fontSize:28,padding:"0 4px",lineHeight:1,flexShrink:0}},"‹"),
+        el("input",{value:emp.name,onChange:ev=>onUpd("name",ev.target.value),
+          placeholder:"Сотрудник "+(idx+1),
+          style:{background:"transparent",border:"none",color:TXT,fontSize:20,fontWeight:800,flex:1,outline:"none",fontFamily:"inherit"}})
+      ),
+      el("div",{style:{display:"flex",gap:6}},
+        TYPES.map(t=>el("button",{key:t,onClick:()=>onUpd("type",emp.type===t?"":t),style:{
+          flex:1,padding:"10px 4px",borderRadius:12,fontSize:12,fontWeight:700,
+          border:"1.5px solid "+(emp.type===t?TC[t].color:"transparent"),
+          background:emp.type===t?TC[t].color:LIFT,
+          color:emp.type===t?BG:TC[t].color}},t))
+      )
+    ),
+
+    // Стата
+    r&&el("div",{style:{display:"flex",gap:8,padding:"12px 10px 0"}},
+      [{l:emp.type==="Бек"?"Смен":"Часов",v:emp.type==="Бек"?r.sh:r.hrs},
+       {l:"Начислено",v:fmt(r.earn)+" ₽"}].map(x=>
+        el("div",{key:x.l,style:{flex:1,background:LIFT,borderRadius:14,padding:"10px 14px"}},
+          el("div",{style:{fontSize:9,color:MUT,textTransform:"uppercase",letterSpacing:2}},x.l),
+          el("div",{style:{fontSize:19,fontWeight:800,marginTop:4}},x.v)
+        )
+      )
+    ),
+
+    // Тариф
+    tc&&el("div",{style:{margin:"10px 10px 0",padding:"9px 14px",background:tc.dim,borderRadius:12,fontSize:11,color:tc.color,fontWeight:600,lineHeight:1.6}},
+      emp.type==="Полная"?"📅 Будни: 1–3 ч × 300₽, свыше 3 ч × 500₽  ·  Сб/Вс: 500 ₽/ч":
+      emp.type==="Стажировка"?"⏱ 300 ₽ за каждый час, любой день":
+      "🎯 3 000 ₽ за каждую смену  ·  поставь любое число = вышел"
+    ),
+
+    // Календарь
+    el("div",{style:{padding:"12px 10px 0"}},
+      el("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3,marginBottom:3}},
+        WDS.map((d,i)=>el("div",{key:d,style:{textAlign:"center",fontSize:10,fontWeight:700,padding:"3px 0",color:i>=5?RED:MUT}},d))
+      ),
+      el("div",{style:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}},
+        [...Array(f).fill(null).map((_,i)=>el("div",{key:"x"+i})),
+         ...Array.from({length:n},(_,i)=>i+1).map(d=>
+          el(DayCell,{key:d,day:d,val:emp.days[d-1],weekend:isWE(year,month,d),type:emp.type,onChange:v=>onUpdD(d-1,v)})
+        )]
+      )
+    ),
+
+    el(MoneyBlock,{label:"Штрафы / Вычеты",color:RED,value:emp.fines,comment:emp.finesComment,
+      onValue:v=>onUpd("fines",v),onComment:v=>onUpd("finesComment",v)}),
+    el(MoneyBlock,{label:"Премия",color:GOLD,value:emp.bonus,comment:emp.bonusComment,
+      onValue:v=>onUpd("bonus",v),onComment:v=>onUpd("bonusComment",v)}),
+
+    // Выплачено
+    el(PaidBlock,{
+      paidAmount:emp.paidAmount,
+      paidMonth:emp.paidMonth,
+      paidYear:emp.paidYear,
+      onAmount:v=>onUpd("paidAmount",v),
+      onPeriod:(m,y)=>{onUpd("paidMonth",m);onUpd("paidYear",y);}
+    }),
+
+    // Итого
+    r&&el("div",{style:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",
+      width:"100%",maxWidth:440,background:"rgba(8,8,15,.97)",borderTop:"1px solid "+LIFT,
+      padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      el("div",null,
+        el("div",{style:{fontSize:9,color:MUT,textTransform:"uppercase",letterSpacing:3}},"К выплате"),
+        el("div",{style:{fontSize:26,fontWeight:900,color:GRN,letterSpacing:-1,marginTop:1}},fmt(r.net)+" ₽")
+      ),
+      el("div",{style:{textAlign:"right",display:"flex",flexDirection:"column",gap:3}},
+        r.b>0&&el("div",{style:{fontSize:13,fontWeight:700,color:GOLD}},"+"+fmt(r.b)+" ₽ премии"),
+        r.f>0&&el("div",{style:{fontSize:13,fontWeight:700,color:RED}},"−"+fmt(r.f)+" ₽ штраф"),
+        parseFloat(emp.paidAmount)>0&&el("div",{style:{fontSize:13,fontWeight:700,color:BLUE}},
+          "✓ "+fmt(parseFloat(emp.paidAmount))+" ₽ за "+MONTHS_GEN[emp.paidMonth-1]
+        )
+      )
+    )
+  );
+}
+
+// ── Главный экран ─────────────────────────────────────
+function App(){
+  const now=new Date();
+  const saved=load();
+  const[month,setMonth]=useState(saved?.m||now.getMonth()+1);
+  const[year,setYear]=useState(saved?.y||now.getFullYear());
+  const[emps,setEmps]=useState(()=>{
+    const m=saved?.m||now.getMonth()+1;
+    const y=saved?.y||now.getFullYear();
+    const base=saved?.e||[];
+    return base.concat(Array.from({length:Math.max(0,7-base.length)},()=>mkEmp(m,y)))
+               .map(e=>({...mkEmp(m,y),...e}));
+  });
+  const[page,setPage]=useState("list");
+
+  useEffect(()=>save({m:month,y:year,e:emps}),[month,year,emps]);
+
+  const upd=(i,f,v)=>setEmps(p=>p.map((em,j)=>j===i?{...em,[f]:v}:em));
+  const updD=(i,d,v)=>setEmps(p=>p.map((em,j)=>{if(j!==i)return em;const ds=[...em.days];ds[d]=v;return{...em,days:ds};}));
+
+  const tot=emps.reduce((a,em)=>{
+    const r=calcEmp(em,year,month);
+    if(r){a.earn+=r.earn;a.f+=r.f;a.b+=r.b;a.net+=r.net;}
+    return a;
+  },{earn:0,f:0,b:0,net:0});
+
+  const pm=()=>month===1?(setMonth(12),setYear(y=>y-1)):setMonth(m=>m-1);
+  const nm=()=>month===12?(setMonth(1),setYear(y=>y+1)):setMonth(m=>m+1);
+
+  if(typeof page==="number")return el(Detail,{
+    emp:emps[page],idx:page,year,month,
+    onBack:()=>setPage("list"),
+    onUpd:(f,v)=>upd(page,f,v),
+    onUpdD:(d,v)=>updD(page,d,v)
+  });
+
+  return el("div",{style:{background:BG,minHeight:"100vh",maxWidth:440,margin:"0 auto",paddingBottom:110}},
+    // Шапка
+    el("div",{style:{padding:"20px 16px 0",position:"sticky",top:0,background:BG,zIndex:10}},
+      el("div",{style:{fontSize:9,letterSpacing:4,color:MUT,textTransform:"uppercase",marginBottom:14}},"Ведомость · Бармены"),
+      el("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}},
+        el("button",{onClick:pm,style:{background:LIFT,border:"none",color:TXT,width:46,height:46,borderRadius:14,fontSize:26}},"‹"),
+        el("div",{style:{textAlign:"center"}},
+          el("div",{style:{fontSize:26,fontWeight:900,letterSpacing:-1.5,lineHeight:1}},MONTHS[month-1]),
+          el("div",{style:{fontSize:13,color:MUT,marginTop:3}},year)
+        ),
+        el("button",{onClick:nm,style:{background:LIFT,border:"none",color:TXT,width:46,height:46,borderRadius:14,fontSize:26}},"›")
+      )
+    ),
+
+    // Карточки
+    el("div",{style:{padding:"0 10px"}},
+      emps.map((emp,i)=>{
+        const r=calcEmp(emp,year,month);
+        const tc=emp.type?TC[emp.type]:null;
+        const paid=parseFloat(emp.paidAmount)||0;
+        return el("div",{key:i,onClick:()=>setPage(i),style:{
+          display:"flex",alignItems:"center",background:CARD,borderRadius:20,
+          padding:"14px",marginBottom:8,cursor:"pointer",gap:12}},
+          el("div",{style:{width:48,height:48,borderRadius:15,flexShrink:0,
+            background:tc?.dim||LIFT,display:"flex",alignItems:"center",
+            justifyContent:"center",fontSize:20,fontWeight:900,color:tc?.color||MUT}},
+            emp.name?emp.name[0].toUpperCase():i+1
+          ),
+          el("div",{style:{flex:1,minWidth:0}},
+            el("div",{style:{fontSize:16,fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:emp.name?TXT:MUT}},
+              emp.name||("Сотрудник "+(i+1))
+            ),
+            el("div",{style:{fontSize:11,marginTop:3,color:tc?.color||MUT}},
+              emp.type?(emp.type+" · "+tc.hint):"Нажми чтобы заполнить →"
+            ),
+            // Бейджи
+            el("div",{style:{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}},
+              paid>0&&el("span",{style:{fontSize:10,color:BLUE,display:"flex",alignItems:"center",gap:3,
+                background:"rgba(78,168,222,.12)",borderRadius:6,padding:"2px 7px"}},
+                el(IconCheck,{color:BLUE,size:10}),
+                "выплачено "+MONTHS_GEN[emp.paidMonth-1]
+              ),
+              emp.finesComment&&el("span",{style:{fontSize:10,color:RED,display:"flex",alignItems:"center",gap:3}},
+                el(IconMsg,{color:RED,size:10}),emp.finesComment.slice(0,18)+(emp.finesComment.length>18?"…":"")
+              ),
+              emp.bonusComment&&el("span",{style:{fontSize:10,color:GOLD,display:"flex",alignItems:"center",gap:3}},
+                el(IconMsg,{color:GOLD,size:10}),emp.bonusComment.slice(0,18)+(emp.bonusComment.length>18?"…":"")
+              )
+            )
+          ),
+          el("div",{style:{textAlign:"right",flexShrink:0}},
+            r?[
+              el("div",{key:"a",style:{fontSize:17,fontWeight:900,color:paid?BLUE:GRN}},
+                (paid?fmt(paid):fmt(r.net))+" ₽"
+              ),
+              el("div",{key:"b",style:{fontSize:11,color:MUT,marginTop:2}},
+                paid?("из "+fmt(r.net)):(emp.type==="Бек"?(r.sh+" смен"):(r.hrs+" ч"))
+              )
+            ]:el("div",{style:{fontSize:22,color:LIFT}},"—")
+          )
+        );
+      })
+    ),
+
+    // Итого
+    el("div",{style:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",
+      width:"100%",maxWidth:440,background:"rgba(8,8,15,.98)",borderTop:"1px solid "+LIFT,
+      padding:"10px 20px 14px"}},
+      el("div",{style:{display:"flex",gap:10,marginBottom:8,paddingBottom:8,borderBottom:"1px solid "+LIFT}},
+        el("div",{style:{flex:1}},
+          el("div",{style:{fontSize:8,color:MUT,textTransform:"uppercase",letterSpacing:2}},"Начислено"),
+          el("div",{style:{fontSize:13,fontWeight:700}},fmt(tot.earn)+" ₽")
+        ),
+        tot.f>0&&el("div",{style:{flex:1}},
+          el("div",{style:{fontSize:8,color:MUT,textTransform:"uppercase",letterSpacing:2}},"Штрафы"),
+          el("div",{style:{fontSize:13,fontWeight:700,color:RED}},"−"+fmt(tot.f)+" ₽")
+        ),
+        tot.b>0&&el("div",{style:{flex:1}},
+          el("div",{style:{fontSize:8,color:MUT,textTransform:"uppercase",letterSpacing:2}},"Премии"),
+          el("div",{style:{fontSize:13,fontWeight:700,color:GOLD}},"+"+fmt(tot.b)+" ₽")
+        )
+      ),
+      el("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        el("div",null,
+          el("div",{style:{fontSize:9,color:MUT,textTransform:"uppercase",letterSpacing:3}},"Итого к выплате"),
+          el("div",{style:{fontSize:26,fontWeight:900,color:GRN,letterSpacing:-1,marginTop:1}},fmt(tot.net)+" ₽")
+        )
+      )
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(el(App));
+</script>
+</body>
+</html>
